@@ -1,0 +1,1732 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Relatório Offline</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
+        ::-webkit-scrollbar-corner { background: #111827; }
+        .sticky-header th { position: sticky; top: 0; z-index: 20; background-color: #1f2937; }
+        .hidden { display: none; }
+        .metric-btn.active { background-color: #1D4ED8; color: #FFF; }
+        .fornecedor-btn.active { background-color: #2563EB; color: #FFF; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .file-input-label { display: block; text-align: left; font-size: 0.875rem; font-weight: 500; color: #d1d5db; margin-bottom: 0.5rem; }
+        .tooltip { position: relative; display: inline-block; cursor: pointer; }
+        .tooltip .tooltip-text {
+            visibility: hidden; width: 220px; background-color: #1f2937; color: #fff;
+            border-radius: 6px; padding: 8px; position: absolute; z-index: 1001; bottom: 125%; left: 50%;
+            margin-left: -110px; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 flex items-center justify-center min-h-screen">
+    <div class="text-center p-8 bg-gray-800 rounded-lg shadow-2xl max-w-lg w-full m-4">
+        <h1 class="text-2xl font-bold text-white mb-4">Gerador de Relatório Offline</h1>
+        <p class="text-gray-400 mb-6">Carregue os arquivos para gerar um único HTML com o dashboard e todos os dados embutidos.</p>
+        
+        <div class="space-y-4 mb-6">
+            <div>
+                <label for="sales-file-input" class="file-input-label">1. Arquivo de Vendas (Mês Atual)</label>
+                <input type="file" id="sales-file-input" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" accept=".csv, .xls, .xlsx"/>
+            </div>
+            <div>
+                <label for="clients-file-input" class="file-input-label">2. Cadastro de Clientes</label>
+                <input type="file" id="clients-file-input" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100" accept=".csv, .xls, .xlsx"/>
+            </div>
+            <div>
+                <label for="history-file-input" class="file-input-label">3. Histórico de Vendas (Mês Anterior)</label>
+                <input type="file" id="history-file-input" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" accept=".csv, .xls, .xlsx"/>
+            </div>
+        </div>
+        
+        <button id="generate-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg w-full disabled:bg-gray-500" disabled>
+            Gerar Relatório
+        </button>
+
+        <div id="status" class="mt-6 text-sm h-6"></div>
+
+        <div id="download-container" class="hidden mt-6 border-t border-gray-700 pt-6">
+            <a id="download-link" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg w-full inline-block">
+                Baixar Relatório HTML
+            </a>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const salesFileInput = document.getElementById('sales-file-input');
+            const clientsFileInput = document.getElementById('clients-file-input');
+            const historyFileInput = document.getElementById('history-file-input');
+            const generateBtn = document.getElementById('generate-btn');
+            const statusEl = document.getElementById('status');
+            const downloadContainer = document.getElementById('download-container');
+            const downloadLink = document.getElementById('download-link');
+            
+            let salesFile, clientsFile, historyFile;
+
+            const checkFiles = () => {
+                generateBtn.disabled = !(salesFile && clientsFile && historyFile);
+                downloadContainer.classList.add('hidden');
+                statusEl.innerHTML = '';
+            };
+
+            salesFileInput.addEventListener('change', (e) => {
+                salesFile = e.target.files[0];
+                checkFiles();
+            });
+
+            clientsFileInput.addEventListener('change', (e) => {
+                clientsFile = e.target.files[0];
+                checkFiles();
+            });
+            
+            historyFileInput.addEventListener('change', (e) => {
+                historyFile = e.target.files[0];
+                checkFiles();
+            });
+
+            function parseDate(dateString) {
+                if (!dateString) return null;
+                if (dateString instanceof Date) {
+                    return !isNaN(dateString.getTime()) ? dateString : null;
+                }
+                if (typeof dateString === 'number') {
+                    return new Date(Math.round((dateString - 25569) * 86400 * 1000));
+                }
+                if (typeof dateString !== 'string') return null;
+                
+                const parts = dateString.split('/');
+                if (parts.length === 3) {
+                    const [day, month, year] = parts;
+                    if (day.length === 2 && month.length === 2 && year.length === 4) {
+                        return new Date(`${year}-${month}-${day}T00:00:00`);
+                    }
+                }
+                
+                const isoDate = new Date(dateString);
+                if (!isNaN(isoDate.getTime())) {
+                    return isoDate;
+                }
+
+                return null;
+            }
+
+            const readFile = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            let jsonData;
+                            const data = event.target.result;
+                            if (file.name.endsWith('.csv')) {
+                                const lines = data.split(/\r?\n/).filter(line => line.trim() !== '');
+                                if (lines.length < 2) throw new Error(`Arquivo CSV '${file.name}' inválido ou vazio.`);
+                                const headers = lines.shift().trim().split(';');
+                                jsonData = lines.map(line => {
+                                    const values = line.trim().split(';');
+                                    let row = {};
+                                    headers.forEach((header, index) => {
+                                        row[header.trim()] = values[index] || null;
+                                    });
+                                    return row;
+                                });
+                            } else {
+                                const workbook = XLSX.read(new Uint8Array(data), {type: 'array'});
+                                const firstSheetName = workbook.SheetNames[0];
+                                const worksheet = workbook.Sheets[firstSheetName];
+                                jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, cellDates: true });
+                            }
+                            resolve(jsonData);
+                        } catch (error) {
+                            reject(error);
+                        }
+                    };
+                    reader.onerror = () => reject(new Error(`Erro ao ler o arquivo '${file.name}'.`));
+
+                    if (file.name.endsWith('.csv')) {
+                        reader.readAsText(file, 'UTF-8');
+                    } else if (file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
+                        reader.readAsArrayBuffer(file);
+                    } else {
+                        reject(new Error(`Formato de arquivo não suportado: ${file.name}`));
+                    }
+                });
+            };
+
+            function parseBrazilianNumber(value) {
+                if (typeof value === 'number') return value;
+                if (typeof value !== 'string' || !value) return 0;
+
+                const cleaned = String(value).replace(/R\$\s?/g, '').trim();
+                const lastComma = cleaned.lastIndexOf(',');
+                const lastDot = cleaned.lastIndexOf('.');
+                let numberString;
+
+                if (lastComma > lastDot) {
+                    numberString = cleaned.replace(/\./g, '').replace(',', '.');
+                } else if (lastDot > lastComma) {
+                    numberString = cleaned.replace(/,/g, '');
+                } else {
+                    numberString = cleaned.replace(',', '.');
+                }
+                const number = parseFloat(numberString);
+                return isNaN(number) ? 0 : number;
+            }
+            
+            const processSalesData = (rawData, clientMap) => {
+                return rawData.map(rawRow => {
+                    const clientInfo = clientMap.get(String(rawRow['CODCLI'])) || {};
+                    
+                    let vendorName = String(rawRow['NOME'] || '');
+                    let supervisorName = String(rawRow['SUPERV'] || '');
+                    let codUsur = String(rawRow['CODUSUR'] || '');
+                    const pedido = String(rawRow['PEDIDO'] || '');
+                    
+                    const nomeClienteParaLogica = (clientInfo.razaoSocial || '').toUpperCase();
+
+                    const supervisorUpper = (supervisorName || '').trim().toUpperCase();
+                    if (supervisorUpper === 'BALCAO' || supervisorUpper === 'BALCÃO') {
+                        supervisorName = 'BALCAO';
+                    }
+
+                    if (supervisorName === 'BALCAO' && nomeClienteParaLogica.includes('AMERICANAS')) {
+                        vendorName = 'AMERICANAS';
+                        codUsur = '1001';
+                    }
+
+                    if (pedido.startsWith('120')) {
+                        vendorName = 'VD HIAGO';
+                        supervisorName = 'HIAGO ASSUNCAO';
+                        codUsur = '1002';
+                    }
+
+                    return {
+                        PEDIDO: pedido, 
+                        NOME: vendorName,
+                        SUPERV: supervisorName, 
+                        DESCRICAO: String(rawRow['DESCRICAO'] || ''),
+                        FORNECEDOR: String(rawRow['FORNECEDOR'] || ''),
+                        OBSERVACAOFOR: String(rawRow['OBSERVACAOFOR'] || '').trim(), CODFOR: String(rawRow['CODFOR'] || ''),
+                        CODUSUR: codUsur,
+                        CODCLI: String(rawRow['CODCLI'] || ''),
+                        CLIENTE_NOME: clientInfo.nomeCliente || 'N/A',
+                        CIDADE: clientInfo.cidade || 'N/A',
+                        BAIRRO: clientInfo.bairro || 'N/A',
+                        QTVENDA: parseInt(String(rawRow['QTVENDA'] || '0').trim(), 10),
+                        VLVENDA: parseBrazilianNumber(rawRow['VLVENDA']),
+                        TOTPESOLIQ: parseBrazilianNumber(rawRow['TOTPESOLIQ']),
+                        DTPED: rawRow['DTPED'], DTSAIDA: rawRow['DTSAIDA'], POSICAO: String(rawRow['POSICAO'] || '')
+                    };
+                });
+            };
+
+            generateBtn.addEventListener('click', async () => {
+                if (!salesFile || !clientsFile || !historyFile) return;
+                generateBtn.disabled = true;
+                statusEl.innerHTML = '<p class="text-yellow-400">Processando arquivos...</p>';
+
+                try {
+                    const [salesDataRaw, clientsDataRaw, historyDataRaw] = await Promise.all([
+                        readFile(salesFile),
+                        readFile(clientsFile),
+                        readFile(historyFile)
+                    ]);
+
+                    const clientRcaOverrides = new Map();
+                    salesDataRaw.forEach(rawRow => {
+                        const pedido = String(rawRow['PEDIDO'] || '');
+                        const codCli = String(rawRow['CODCLI'] || '');
+                        if(!codCli) return;
+
+                        if (pedido.startsWith('120')) {
+                            clientRcaOverrides.set(codCli, '120');
+                        }
+                    });
+
+                    statusEl.innerHTML = '<p class="text-blue-400">Processando cadastro de clientes...</p>';
+                    const clientMap = new Map();
+                    clientsDataRaw.forEach(client => {
+                        const codCli = String(client['Código'] || '');
+                        if (!codCli) return;
+
+                        const rcas = new Set();
+                        if (client['RCA 1']) rcas.add(String(client['RCA 1']));
+                        if (client['RCA 2']) rcas.add(String(client['RCA 2']));
+                        
+                        let registrationDateStr = client['Data e Hora de Cadastro'] || '';
+                        if (registrationDateStr.includes(' ')) {
+                            registrationDateStr = registrationDateStr.split(' ')[0];
+                        }
+
+                        const clientData = {
+                            'Código': codCli,
+                            rcas: Array.from(rcas),
+                            cidade: String(client['Nome da Cidade'] || 'N/A'),
+                            nomeCliente: String(client['Fantasia'] || client['Cliente'] || 'N/A'),
+                            bairro: String(client['Bairro'] || 'N/A'),
+                            razaoSocial: String(client['Cliente'] || 'N/A'),
+                            fantasia: String(client['Fantasia'] || 'N/A'),
+                            cnpj_cpf: String(client['CNPJ/CPF'] || 'N/A'),
+                            endereco: String(client['Endereço Comercial'] || client['Endereço'] || 'N/A'),
+                            numero: String(client['Número'] || 'SN'),
+                            cep: String(client['CEP'] || 'N/A'),
+                            telefone: String(client['Telefone Comercial'] || 'N/A'),
+                            email: String(client['E-mail'] || 'N/A'),
+                            ramo: String(client['Ramo Atividade'] || 'N/A'),
+                            ultimaCompra: client['Data da Última Compra'],
+                            dataCadastro: registrationDateStr,
+                            bloqueio: String(client['Bloqueio'] || '').trim().toUpperCase(),
+                            inscricaoEstadual: String(client['Insc. Est. / Produtor'] || 'N/A')
+                        };
+
+                        if (clientRcaOverrides.has(codCli)) {
+                            clientData.rcas.unshift(clientRcaOverrides.get(codCli));
+                        }
+
+                        const nomeClienteUpper = clientData.razaoSocial.toUpperCase();
+                        if (nomeClienteUpper.includes('AMERICANAS')) {
+                             clientData.rcas.unshift('1001');
+                        }
+
+                        clientMap.set(codCli, clientData);
+                    });
+
+                    statusEl.innerHTML = '<p class="text-blue-400">Processando e cruzando dados de vendas...</p>';
+                    const processedSalesData = processSalesData(salesDataRaw, clientMap);
+                    const processedHistoryData = processSalesData(historyDataRaw, clientMap);
+
+                    statusEl.innerHTML = '<p class="text-blue-400">Atualizando datas de última compra...</p>';
+                    const latestSaleDateByClient = new Map();
+                    processedSalesData.forEach(sale => {
+                        const codcli = sale.CODCLI;
+                        const saleDate = parseDate(sale.DTPED);
+                        if (codcli && saleDate) {
+                            const existingDate = latestSaleDateByClient.get(codcli);
+                            if (!existingDate || saleDate > existingDate) {
+                                latestSaleDateByClient.set(codcli, saleDate);
+                            }
+                        }
+                    });
+
+                    clientMap.forEach((client, codcli) => {
+                        const lastPurchaseDate = parseDate(client.ultimaCompra);
+                        const latestSaleDate = latestSaleDateByClient.get(codcli);
+
+                        if (latestSaleDate && (!lastPurchaseDate || isNaN(lastPurchaseDate.getTime()) || latestSaleDate > lastPurchaseDate)) {
+                            client.ultimaCompra = latestSaleDate;
+                        }
+                    });
+                    
+                    statusEl.innerHTML = '<p class="text-blue-400">Agregando pedidos...</p>';
+                    const aggregateOrders = (data) => {
+                        const orders = {};
+                        data.forEach(row => {
+                            if (!row.PEDIDO) return;
+                            if (!orders[row.PEDIDO]) {
+                                orders[row.PEDIDO] = { ...row, QTVENDA: 0, VLVENDA: 0, TOTPESOLIQ: 0, FORNECEDORES: new Set() };
+                            }
+                            orders[row.PEDIDO].QTVENDA += row.QTVENDA;
+                            orders[row.PEDIDO].VLVENDA += row.VLVENDA;
+                            orders[row.PEDIDO].TOTPESOLIQ += row.TOTPESOLIQ;
+                            if (row.OBSERVACAOFOR) {
+                                orders[row.PEDIDO].FORNECEDORES.add(row.OBSERVACAOFOR);
+                            }
+                        });
+                        return Object.values(orders).map(order => {
+                            order.FORNECEDORES_LIST = Array.from(order.FORNECEDORES);
+                            order.FORNECEDORES_STR = order.FORNECEDORES_LIST.join(', ');
+                            return order;
+                        });
+                    };
+                    
+                    const aggregatedByOrder = aggregateOrders(processedSalesData);
+                    
+                    statusEl.innerHTML = '<p class="text-blue-400">Gerando arquivo HTML...</p>';
+                    generateReportFile({
+                        detailed: processedSalesData,
+                        history: processedHistoryData,
+                        byOrder: aggregatedByOrder,
+                        clients: Array.from(clientMap.values())
+                    });
+                    
+                    statusEl.innerHTML = '<p class="text-emerald-400">Seu relatório está pronto!</p>';
+                    downloadContainer.classList.remove('hidden');
+
+                } catch (error) {
+                    console.error("Erro ao gerar relatório: ", error);
+                    statusEl.innerHTML = `<p class="text-red-500">Erro: ${error.message}</p>`;
+                } finally {
+                    generateBtn.disabled = false;
+                }
+            });
+
+            function generateReportFile(data) {
+                const jsonDataString = JSON.stringify(data);
+                const generationDate = new Date().toLocaleString('pt-BR');
+                
+                const scriptLogic = `
+        const allSalesData = embeddedData.detailed;
+        const allHistoryData = embeddedData.history;
+        const aggregatedOrders = embeddedData.byOrder;
+        const allClientsData = embeddedData.clients;
+
+        Chart.register(ChartDataLabels);
+
+        const mainDashboard = document.getElementById('main-dashboard');
+        const cityView = document.getElementById('city-view');
+        const weeklyView = document.getElementById('weekly-view');
+        
+        const showWeeklyBtn = document.getElementById('show-weekly-btn');
+        const showCityBtn = document.getElementById('show-city-btn');
+        const backToMainFromCityBtn = document.getElementById('back-to-main-from-city-btn');
+        const backToMainFromWeeklyBtn = document.getElementById('back-to-main-from-weekly-btn');
+
+        const totalVendasEl = document.getElementById('total-vendas');
+        const totalPesoEl = document.getElementById('total-peso');
+        const viewChartBtn = document.getElementById('viewChartBtn');
+        const viewTableBtn = document.getElementById('viewTableBtn');
+        const chartView = document.getElementById('chartView');
+        const tableView = document.getElementById('tableView');
+        const faturamentoBtn = document.getElementById('faturamentoBtn');
+        const pesoBtn = document.getElementById('pesoBtn');
+        
+        const supervisorFilter = document.getElementById('supervisor-filter');
+        const vendedorFilter = document.getElementById('vendedor-filter');
+        const posicaoFilter = document.getElementById('posicao-filter');
+        const codcliFilter = document.getElementById('codcli-filter');
+        const clearFiltersBtn = document.getElementById('clear-filters-btn');
+        const salesByPersonTitle = document.getElementById('sales-by-person-title');
+        const fornecedorToggleContainer = document.getElementById('fornecedor-toggle-container');
+        
+        const citySupervisorFilter = document.getElementById('city-supervisor-filter');
+        const cityVendedorFilter = document.getElementById('city-vendedor-filter');
+        const cityNameFilter = document.getElementById('city-name-filter');
+        const cityCodCliFilter = document.getElementById('city-codcli-filter');
+        const citySuggestions = document.getElementById('city-suggestions');
+        const clearCityFiltersBtn = document.getElementById('clear-city-filters-btn');
+        const totalFaturamentoCidadeEl = document.getElementById('total-faturamento-cidade');
+        const cityActiveDetailTableBody = document.getElementById('city-active-detail-table-body');
+        const cityInactiveDetailTableBody = document.getElementById('city-inactive-detail-table-body');
+
+        const weeklySupervisorFilter = document.getElementById('weekly-supervisor-filter');
+        const clearWeeklyFiltersBtn = document.getElementById('clear-weekly-filters-btn');
+        const totalMesSemanalEl = document.getElementById('total-mes-semanal');
+        const weeklyFornecedorToggleContainer = document.getElementById('weekly-fornecedor-toggle-container');
+        
+        const modal = document.getElementById('order-details-modal');
+        const modalCloseBtn = document.getElementById('modal-close-btn');
+        const modalPedidoId = document.getElementById('modal-pedido-id');
+        const modalHeaderInfo = document.getElementById('modal-header-info');
+        const modalTableBody = document.getElementById('modal-table-body');
+        const modalFooterTotal = document.getElementById('modal-footer-total');
+        
+        const clientModal = document.getElementById('client-details-modal');
+        const clientModalCloseBtn = document.getElementById('client-modal-close-btn');
+        const clientModalContent = document.getElementById('client-modal-content');
+
+        let charts = {};
+        let currentProductMetric = 'faturamento';
+        let currentFornecedor = '';
+        let currentWeeklyFornecedor = '';
+        
+        const getFirstName = (fullName) => (fullName || '').split(' ')[0];
+
+        function parseDate(dateString) {
+            if (!dateString) return null;
+            if (dateString instanceof Date) {
+                return !isNaN(dateString.getTime()) ? dateString : null;
+            }
+            if (typeof dateString === 'number') {
+                return new Date(Math.round((dateString - 25569) * 86400 * 1000));
+            }
+            if (typeof dateString !== 'string') return null;
+            
+            const parts = dateString.split('/');
+            if (parts.length === 3) {
+                const [day, month, year] = parts;
+                if (day.length === 2 && month.length === 2 && year.length === 4) {
+                    return new Date(\`\${year}-\${month}-\${day}T00:00:00\`);
+                }
+            }
+            
+            const isoDate = new Date(dateString);
+            if (!isNaN(isoDate.getTime())) {
+                return isoDate;
+            }
+
+            return null;
+        }
+
+        function formatDate(date) {
+            if (!date) return '';
+            const d = parseDate(date);
+            if (!d || isNaN(d.getTime())) return '';
+            const userTimezoneOffset = d.getTimezoneOffset() * 60000;
+            return new Date(d.getTime() + userTimezoneOffset).toLocaleDateString('pt-BR');
+        }
+        
+        function calculateSummaryFromData(data, isFiltered) {
+            const summary = { 
+                totalFaturamento: 0, 
+                totalPeso: 0, 
+                vendasPorVendedor: {}, 
+                vendasPorSupervisor: {}, 
+                top10ProdutosFaturamento: [], 
+                top10ProdutosPeso: [],
+                faturamentoPorFornecedor: {} 
+            };
+            const salesByProduct = {};
+            const faturamentoMap = new Map();
+
+            data.forEach(item => {
+                summary.totalFaturamento += item.VLVENDA;
+                summary.totalPeso += item.TOTPESOLIQ;
+
+                const vendedor = item.NOME || 'N/A';
+                summary.vendasPorVendedor[vendedor] = (summary.vendasPorVendedor[vendedor] || 0) + item.VLVENDA;
+
+                const supervisor = item.SUPERV || 'N/A';
+                summary.vendasPorSupervisor[supervisor] = (summary.vendasPorSupervisor[supervisor] || 0) + item.VLVENDA;
+
+                const produto = item.DESCRICAO || 'N/A';
+                if (!salesByProduct[produto]) salesByProduct[produto] = { faturamento: 0, peso: 0 };
+                salesByProduct[produto].faturamento += item.VLVENDA;
+                salesByProduct[produto].peso += item.TOTPESOLIQ;
+
+                let fornecedorLabel;
+                if(isFiltered){
+                    const fornecedorNome = item.FORNECEDOR || 'N/A';
+                    const codFor = item.CODFOR;
+
+                    if (fornecedorNome === 'VINHOS RANDON L') {
+                        if (codFor === '1197') {
+                            fornecedorLabel = 'V. RANDON Ñ Alcoólicos - 1197';
+                        } else if (codFor === '1198') {
+                            fornecedorLabel = 'V. RANDON Alcoólicos - 1198';
+                        } else {
+                            fornecedorLabel = \`\${fornecedorNome} - \${codFor}\`;
+                        }
+                    } else {
+                        fornecedorLabel = \`\${fornecedorNome} - \${codFor}\`;
+                    }
+                } else {
+                     fornecedorLabel = item.OBSERVACAOFOR || 'N/A';
+                }
+                
+                const currentTotal = faturamentoMap.get(fornecedorLabel) || 0;
+                faturamentoMap.set(fornecedorLabel, currentTotal + item.VLVENDA);
+            });
+
+            summary.faturamentoPorFornecedor = Object.fromEntries(faturamentoMap);
+            summary.top10ProdutosFaturamento = Object.entries(salesByProduct).sort(([,a],[,b]) => b.faturamento - a.faturamento).slice(0, 10).map(([p, d]) => ({ produto: p, ...d }));
+            summary.top10ProdutosPeso = Object.entries(salesByProduct).sort(([,a],[,b]) => b.peso - a.peso).slice(0, 10).map(([p, d]) => ({ produto: p, ...d }));
+            return summary;
+        }
+
+        const isObject = obj => obj && typeof obj === 'object' && !Array.isArray(obj);
+        const mergeDeep = (...objects) => {
+            return objects.reduce((prev, obj) => {
+                Object.keys(obj).forEach(key => {
+                    const pVal = prev[key];
+                    const oVal = obj[key];
+                    if (isObject(pVal) && isObject(oVal)) {
+                        prev[key] = mergeDeep(pVal, oVal);
+                    } else {
+                        prev[key] = oVal;
+                    }
+                });
+                return prev;
+            }, {});
+        };
+
+        function createChart(canvasId, type, labels, chartData, optionsOverrides = {}) {
+            const container = document.getElementById(canvasId + 'Container');
+            if (!container) {
+                console.error('Chart container not found for:', canvasId);
+                return;
+            }
+            if (charts[canvasId]) {
+                charts[canvasId].destroy();
+            }
+            
+            container.innerHTML = '';
+            const newCanvas = document.createElement('canvas');
+            newCanvas.id = canvasId;
+            container.appendChild(newCanvas);
+            
+            container.style.display = '';
+            container.style.alignItems = '';
+            container.style.justifyContent = '';
+
+            const ctx = newCanvas.getContext('2d');
+            
+            let finalDatasets;
+            if (Array.isArray(chartData) && chartData.length > 0 && typeof chartData[0] === 'object' && chartData[0].hasOwnProperty('label')) {
+                finalDatasets = chartData;
+            } else {
+                 if (canvasId === 'customerStatusChart') {
+                     finalDatasets = [{ data: chartData, backgroundColor: ['#34D399', '#FBBF24'], borderColor: ['#1f2937', '#1f2937'] }];
+                 } else {
+                     finalDatasets = [{ data: chartData, backgroundColor: ['#10B981', '#EF4444', '#3B82F6', '#F97316', '#8B5CF6', '#F59E0B', '#EC4899', '#6366F1', '#14B8A6', '#D946EF', '#0EA5E9'] }];
+                 }
+            }
+            
+            let baseOptions = {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, datalabels: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { color: '#d1d5db' } }, x: { ticks: { color: '#d1d5db' } } }
+            };
+            let typeDefaults = {};
+            if (type === 'bar') {
+                typeDefaults = {
+                    layout: {
+                        padding: {
+                            right: 30 
+                        }
+                    },
+                    plugins: {
+                        datalabels: {
+                            display: true,
+                            anchor: 'end',
+                            align: 'end',
+                            offset: -4,
+                            color: '#d1d5db',
+                            font: { size: 10 },
+                            formatter: (v) => (v > 1000 ? (v/1000).toFixed(1) + 'k' : v.toFixed(0))
+                        }
+                    }
+                };
+            }
+            if (type === 'doughnut') {
+                typeDefaults = {
+                    maintainAspectRatio: true,
+                    scales: { y: { display: false }, x: { display: false } },
+                    plugins: {
+                        legend: { position: 'top', labels: { color: '#d1d5db' } },
+                        datalabels: {
+                            display: true, color: '#fff', font: { size: 11, weight: 'bold' },
+                            formatter: (v, ctx) => {
+                                const total = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                if(total === 0 || v === 0) return '';
+                                const p = (v / total) * 100;
+                                return p > 5 ? p.toFixed(0) + '%' : '';
+                            }
+                        }
+                    }
+                };
+            }
+            const options = mergeDeep(baseOptions, typeDefaults, optionsOverrides);
+            charts[canvasId] = new Chart(ctx, { type, data: { labels, datasets: finalDatasets }, options });
+        }
+
+        function showNoDataMessage(canvasId, message) {
+            if (charts[canvasId]) {
+                charts[canvasId].destroy();
+            }
+            const container = document.getElementById(canvasId + 'Container');
+            if(container) {
+                container.style.display = 'flex';
+                container.style.alignItems = 'center';
+                container.style.justifyContent = 'center';
+                container.innerHTML = \`<p class="text-gray-500">\${message}</p>\`;
+            }
+        }
+
+        function updateProductBarChart(summary) {
+            const metric = currentProductMetric;
+            const data = metric === 'faturamento' ? summary.top10ProdutosFaturamento : summary.top10ProdutosPeso;
+            const labels = data.map(p => p.produto);
+            const values = data.map(p => p[metric]);
+            createChart('salesByProductBarChart', 'bar', labels, values);
+        }
+
+        function renderTable(data) {
+            const tableBody = document.getElementById('report-table-body');
+            if (!tableBody) return;
+            tableBody.innerHTML = data.map(row => \`
+                <tr class="hover:bg-gray-700">
+                    <td class="px-4 py-2"><a href="#" class="text-blue-400 hover:underline" data-pedido-id="\${row.PEDIDO}">\${row.PEDIDO}</a></td>
+                    <td class="px-4 py-2">\${row.CODCLI}</td>
+                    <td class="px-4 py-2">\${getFirstName(row.NOME)}</td>
+                    <td class="px-4 py-2">\${row.FORNECEDORES_STR || ''}</td>
+                    <td class="px-4 py-2">\${formatDate(row.DTSAIDA)}</td>
+                    <td class="px-4 py-2 text-right">\${(row.TOTPESOLIQ || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Kg</td>
+                    <td class="px-4 py-2 text-right">\${(row.VLVENDA || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                    <td class="px-4 py-2">\${row.POSICAO || ''}</td>
+                </tr>
+            \`).join('');
+        }
+
+        function getWorkingDays(year, month) {
+            let count = 0;
+            const date = new Date(year, month, 1);
+            while (date.getMonth() === month) {
+                const day = date.getDay();
+                if (day >= 1 && day <= 5) {
+                    count++;
+                }
+                date.setDate(date.getDate() + 1);
+            }
+            return count;
+        }
+
+        function getPassedWorkingDays(year, month, today) {
+            let count = 0;
+            const date = new Date(year, month, 1);
+            while (date <= today && date.getMonth() === month) {
+                const day = date.getDay();
+                if (day >= 1 && day <= 5) {
+                    count++;
+                }
+                date.setDate(date.getDate() + 1);
+            }
+            return count;
+        }
+
+        function updateTrendChart(currentSales, historicalSales) {
+            const today = new Date();
+            const currentMonth = today.getMonth();
+            const currentYear = today.getFullYear();
+            
+            const totalWorkingDays = getWorkingDays(currentYear, currentMonth);
+            const passedWorkingDays = getPassedWorkingDays(currentYear, currentMonth, today);
+
+            const pastMonthRevenue = historicalSales.reduce((sum, sale) => sum + sale.VLVENDA, 0);
+            const currentMonthRevenue = currentSales.reduce((sum, sale) => sum + sale.VLVENDA, 0);
+            
+            const trend = passedWorkingDays > 0 ? (currentMonthRevenue / passedWorkingDays) * totalWorkingDays : 0;
+
+            createChart('trendChart', 'bar', ['Faturado Mês Passado', 'Tendência Mês Atual'], 
+                [{
+                    label: 'Valor',
+                    data: [pastMonthRevenue, trend],
+                    backgroundColor: ['#EF4444', '#3B82F6']
+                }],
+                {
+                    plugins: {
+                        datalabels: {
+                            display: true,
+                            anchor: 'end',
+                            align: 'end',
+                            color: '#d1d5db',
+                            font: { size: 12, weight: 'bold' },
+                            formatter: (v) => 'R$ ' + (v/1000).toFixed(1) + 'k'
+                        }
+                    }
+                }
+            );
+        }
+
+        function updateAllVisuals() {
+            const supervisor = supervisorFilter.value;
+            const vendedor = vendedorFilter.value;
+            const posicao = posicaoFilter.value;
+            const codcli = codcliFilter.value.trim();
+
+            let filteredSalesData = allSalesData;
+            let filteredHistoryData = allHistoryData;
+            
+            if (currentFornecedor) {
+                 filteredSalesData = filteredSalesData.filter(row => String(row.OBSERVACAOFOR).trim() === currentFornecedor);
+                 filteredHistoryData = filteredHistoryData.filter(row => String(row.OBSERVACAOFOR).trim() === currentFornecedor);
+            }
+
+            if (codcli) {
+                filteredSalesData = filteredSalesData.filter(row => row.CODCLI === codcli);
+                filteredHistoryData = filteredHistoryData.filter(row => row.CODCLI === codcli);
+            } else {
+                if (supervisor) {
+                    filteredSalesData = filteredSalesData.filter(row => row.SUPERV === supervisor);
+                    filteredHistoryData = filteredHistoryData.filter(row => row.SUPERV === supervisor);
+                }
+                if (vendedor) {
+                    filteredSalesData = filteredSalesData.filter(row => row.NOME === vendedor);
+                    filteredHistoryData = filteredHistoryData.filter(row => row.NOME === vendedor);
+                }
+            }
+            
+            if (posicao) {
+                filteredSalesData = filteredSalesData.filter(row => row.POSICAO === posicao);
+            }
+            
+            const filteredTableData = aggregatedOrders.filter(order => {
+                let matches = true;
+                if (codcli) {
+                    matches = matches && order.CODCLI === codcli;
+                } else {
+                    if (supervisor) {
+                        matches = matches && order.SUPERV === supervisor;
+                    }
+                    if (vendedor) {
+                        matches = matches && order.NOME === vendedor;
+                    }
+                }
+                if (currentFornecedor) {
+                    matches = matches && order.FORNECEDORES_LIST.includes(currentFornecedor);
+                }
+                if (posicao) {
+                    matches = matches && order.POSICAO === posicao;
+                }
+                return matches;
+            });
+            
+            const isFiltered = !!supervisor || !!vendedor || !!codcli;
+            const summary = calculateSummaryFromData(filteredSalesData, isFiltered);
+            totalVendasEl.textContent = summary.totalFaturamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            totalPesoEl.textContent = \`\${(summary.totalPeso / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} Ton\`;
+            
+            if (!tableView.classList.contains('hidden')) {
+                renderTable(filteredTableData);
+            }
+            
+            if (!chartView.classList.contains('hidden')) {
+                updateTrendChart(filteredSalesData, filteredHistoryData);
+
+                const totalForPercentage = supervisor ?
+                    Object.values(summary.vendasPorVendedor).reduce((a, b) => a + b, 0) :
+                    Object.values(summary.vendasPorSupervisor).reduce((a, b) => a + b, 0);
+
+                const personChartTooltipOptions = {
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    const value = context.parsed.y;
+                                    if (value !== null) {
+                                        label += new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+                                        if (totalForPercentage > 0) {
+                                            const percentage = ((value / totalForPercentage) * 100).toFixed(2);
+                                            label += \` (\${percentage}%)\`;
+                                        }
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                if (supervisor) {
+                    salesByPersonTitle.textContent = 'Vendas por Vendedor';
+                    createChart('salesByPersonChart', 'bar', Object.keys(summary.vendasPorVendedor).map(getFirstName), Object.values(summary.vendasPorVendedor), personChartTooltipOptions);
+                } else {
+                    salesByPersonTitle.textContent = 'Vendas por Supervisor';
+                    createChart('salesByPersonChart', 'bar', Object.keys(summary.vendasPorSupervisor), Object.values(summary.vendasPorSupervisor), personChartTooltipOptions);
+                }
+                
+                const faturamentoChartTitle = document.getElementById('faturamentoPorFornecedorTitle');
+                faturamentoChartTitle.textContent = isFiltered ? 'Faturamento por Fornecedor' : 'Faturamento por Categoria';
+                const faturamentoPorFornecedorData = summary.faturamentoPorFornecedor;
+                const totalFaturamentoFornecedor = Object.values(faturamentoPorFornecedorData).reduce((a, b) => a + b, 0);
+
+                const fornecedorTooltipOptions = {
+                    indexAxis: 'y',
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    const value = context.parsed.x;
+                                    if (value !== null) {
+                                        label += new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+                                        if (totalFaturamentoFornecedor > 0) {
+                                            const percentage = ((value / totalFaturamentoFornecedor) * 100).toFixed(2);
+                                            label += \` (\${percentage}%)\`;
+                                        }
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                const sortedFornecedores = Object.entries(faturamentoPorFornecedorData)
+                    .sort(([, a], [, b]) => a - b); 
+
+                if (sortedFornecedores.length > 0) {
+                     createChart(
+                        'faturamentoPorFornecedorChart', 
+                        'bar', 
+                        sortedFornecedores.map(([name]) => name), 
+                        sortedFornecedores.map(([, total]) => total),
+                        fornecedorTooltipOptions
+                    );
+                } else {
+                    showNoDataMessage('faturamentoPorFornecedorChart', 'Sem dados de faturamento.');
+                }
+
+                updateProductBarChart(summary);
+            }
+        }
+        
+        function populateSupervisors() {
+            let supervisorDataSource = allSalesData;
+            if (currentFornecedor) {
+                supervisorDataSource = supervisorDataSource.filter(d => String(d.OBSERVACAOFOR).trim() === currentFornecedor);
+            }
+
+            const supervisors = [...new Set(supervisorDataSource.map(item => item.SUPERV).filter(Boolean))].sort();
+            const currentSupervisorValue = supervisorFilter.value;
+            supervisorFilter.innerHTML = '<option value="">Todos Supervisores</option>';
+            supervisors.forEach(sup => {
+                supervisorFilter.innerHTML += \`<option value="\${sup}">\${sup}</option>\`;
+            });
+            supervisorFilter.value = currentSupervisorValue;
+        }
+
+        function updateDependentFilters() {
+            let dataSource = allSalesData;
+            if (currentFornecedor) {
+                dataSource = dataSource.filter(d => String(d.OBSERVACAOFOR).trim() === currentFornecedor);
+            }
+            
+            const selectedVendedor = vendedorFilter.value;
+
+            if (selectedVendedor) {
+                const vendedorInfo = dataSource.find(d => d.NOME === selectedVendedor);
+                if (vendedorInfo && vendedorInfo.SUPERV) {
+                    supervisorFilter.value = vendedorInfo.SUPERV;
+                    supervisorFilter.disabled = true;
+                }
+            } else {
+                supervisorFilter.disabled = false;
+            }
+            
+            const finalSupervisor = supervisorFilter.value;
+            let vendorsToShow;
+
+            if (finalSupervisor) {
+                vendorsToShow = [...new Set(dataSource
+                    .filter(d => d.SUPERV === finalSupervisor)
+                    .map(item => item.NOME)
+                    .filter(Boolean))]
+                    .sort();
+            } else {
+                vendorsToShow = [...new Set(dataSource.map(item => item.NOME).filter(Boolean))].sort();
+            }
+
+            const currentVendedorValue = vendedorFilter.value;
+            vendedorFilter.innerHTML = '<option value="">Todos Vendedores</option>';
+            vendorsToShow.forEach(v => {
+                vendedorFilter.innerHTML += \`<option value="\${v}">\${v}</option>\`;
+            });
+            vendedorFilter.value = currentVendedorValue;
+        }
+
+        function resetMainFilters() {
+            supervisorFilter.value = '';
+            vendedorFilter.value = '';
+            posicaoFilter.value = '';
+            codcliFilter.value = '';
+            currentFornecedor = '';
+
+            supervisorFilter.disabled = false;
+            vendedorFilter.disabled = false;
+
+            document.querySelectorAll('#fornecedor-toggle-container .fornecedor-btn').forEach(b => b.classList.remove('active'));
+            
+            populateSupervisors();
+            updateDependentFilters();
+            updateAllVisuals();
+        }
+        
+        function resetCityFilters() {
+            citySupervisorFilter.value = '';
+            cityVendedorFilter.value = '';
+            cityNameFilter.value = '';
+            cityCodCliFilter.value = '';
+            
+            citySupervisorFilter.disabled = false;
+            cityVendedorFilter.disabled = false;
+            cityNameFilter.disabled = false;
+            cityCodCliFilter.disabled = false;
+
+            updateCityDropdowns();
+            updateCityView();
+        }
+
+        function updateCityDropdowns() {
+            let currentSupervisor = citySupervisorFilter.value;
+            let currentVendedor = cityVendedorFilter.value;
+
+            if (currentVendedor && !citySupervisorFilter.disabled) {
+                const vendedorData = allSalesData.find(d => d.NOME === currentVendedor);
+                if (vendedorData) {
+                    currentSupervisor = vendedorData.SUPERV;
+                }
+            }
+            
+            const supervisors = [...new Set(allSalesData.map(item => item.SUPERV).filter(Boolean))].sort();
+            citySupervisorFilter.innerHTML = '<option value="">Todos Supervisores</option>';
+            supervisors.forEach(sup => {
+                citySupervisorFilter.innerHTML += \`<option value="\${sup}" \${sup === currentSupervisor ? 'selected' : ''}>\${sup}</option>\`;
+            });
+            citySupervisorFilter.value = currentSupervisor;
+
+            let vendedorDataSource = allSalesData;
+            if (currentSupervisor) {
+                vendedorDataSource = vendedorDataSource.filter(d => d.SUPERV === currentSupervisor);
+            }
+            const vendedores = [...new Set(vendedorDataSource.map(item => item.NOME).filter(Boolean))].sort();
+            cityVendedorFilter.innerHTML = '<option value="">Todos Vendedores</option>';
+            vendedores.forEach(v => {
+                cityVendedorFilter.innerHTML += \`<option value="\${v}" \${v === currentVendedor ? 'selected' : ''}>\${v}</option>\`;
+            });
+            
+            if (!vendedores.includes(currentVendedor)) {
+                cityVendedorFilter.value = '';
+            } else {
+                cityVendedorFilter.value = currentVendedor;
+            }
+        }
+        
+        function updateCityView() {
+            const supervisor = citySupervisorFilter.value;
+            const vendedor = cityVendedorFilter.value;
+            const cidadeFiltro = cityNameFilter.value.trim().toLowerCase();
+            const codcliFilterVal = cityCodCliFilter.value.trim();
+
+            const allDates = allSalesData.map(s => parseDate(s.DTPED)).concat(allClientsData.map(c => parseDate(c.ultimaCompra))).filter(d => d && !isNaN(d));
+            const referenceDate = allDates.length > 0 ? new Date(Math.max.apply(null, allDates)) : new Date();
+            const currentMonth = referenceDate.getMonth();
+            const currentYear = referenceDate.getFullYear();
+            
+            const ninetyDaysAgo = new Date(referenceDate);
+            ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+            let clientsForAnalysis = allClientsData;
+            let salesForAnalysis = allSalesData;
+
+            if (supervisor) {
+                salesForAnalysis = salesForAnalysis.filter(s => s.SUPERV === supervisor);
+                const rcasOfSupervisor = [...new Set(salesForAnalysis.map(s => s.CODUSUR))];
+                clientsForAnalysis = clientsForAnalysis.filter(c => c.rcas.some(rca => rcasOfSupervisor.includes(rca)));
+            }
+            if (vendedor) {
+                salesForAnalysis = salesForAnalysis.filter(s => s.NOME === vendedor);
+                const rcasOfVendedor = [...new Set(salesForAnalysis.map(s => s.CODUSUR))];
+                clientsForAnalysis = clientsForAnalysis.filter(c => c.rcas.some(rca => rcasOfVendedor.includes(rca)));
+            }
+            if (cidadeFiltro) {
+                clientsForAnalysis = clientsForAnalysis.filter(c => c.cidade && c.cidade.toLowerCase() === cidadeFiltro);
+                salesForAnalysis = salesForAnalysis.filter(s => s.CIDADE && s.CIDADE.toLowerCase() === cidadeFiltro);
+            }
+            if (codcliFilterVal) {
+                clientsForAnalysis = clientsForAnalysis.filter(c => String(c['Código']) === codcliFilterVal);
+                salesForAnalysis = salesForAnalysis.filter(s => s.CODCLI === codcliFilterVal);
+            }
+
+            const salesThisMonth = allSalesData.filter(sale => {
+                const saleDate = parseDate(sale.DTPED);
+                return saleDate && saleDate.getFullYear() === currentYear && saleDate.getMonth() === currentMonth;
+            });
+            const activeClientCodesThisMonth = new Set(salesThisMonth.map(sale => sale.CODCLI));
+
+            let activeClientsList = [];
+            let inactiveClientsList = [];
+
+            clientsForAnalysis.forEach(client => {
+                const codcli = String(client['Código']);
+                if (codcli === '6720') return; 
+
+                const isBlocked = client.bloqueio === 'S';
+                if(isBlocked) return;
+                
+                const clientRcas = client.rcas || [];
+                const isOnlyRca53 = clientRcas.length > 0 && clientRcas.every(rca => rca === '53');
+
+                if (activeClientCodesThisMonth.has(codcli)) {
+                    activeClientsList.push(client);
+                } else {
+                    if (isOnlyRca53) return; 
+
+                    const lastPurchaseDate = parseDate(client.ultimaCompra);
+                    const registrationDate = parseDate(client.dataCadastro);
+
+                    const isRecentPurchase = lastPurchaseDate && lastPurchaseDate >= ninetyDaysAgo;
+                    const isNewThisMonth = registrationDate && registrationDate.getMonth() === currentMonth && registrationDate.getFullYear() === currentYear;
+                    
+                    if (isRecentPurchase || isNewThisMonth) {
+                        client.isNew = isNewThisMonth && !lastPurchaseDate;
+                        inactiveClientsList.push(client);
+                    }
+                }
+            });
+
+            if (clientsForAnalysis.length > 0) {
+                 const statusChartOptions = {
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#d1d5db' } },
+                        tooltip: { callbacks: { label: function(context) { return context.label; } } },
+                        datalabels: {
+                            formatter: (value, ctx) => {
+                                const total = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                if (total === 0 || value === 0) return '';
+                                const percentage = (value * 100 / total).toFixed(1) + "%";
+                                return \`\${value}\\n(\${percentage})\`;
+                            },
+                            color: '#fff', font: { weight: 'bold' }, textAlign: 'center'
+                        }
+                    }
+                };
+                createChart('customerStatusChart', 'doughnut', ['Ativos no Mês', 'S/ Vendas no Mês'], [activeClientsList.length, inactiveClientsList.length], statusChartOptions);
+            } else {
+                showNoDataMessage('customerStatusChart', 'Sem clientes no filtro para exibir o status.');
+            }
+
+            const salesByActiveClient = {};
+            activeClientsList.forEach(client => {
+                const codcli = String(client['Código']);
+                const clientSales = salesThisMonth.filter(s => s.CODCLI === codcli);
+                const totalFaturamento = clientSales.reduce((sum, sale) => sum + sale.VLVENDA, 0);
+                salesByActiveClient[codcli] = { ...client, total: totalFaturamento };
+            });
+
+            const sortedActiveClients = Object.values(salesByActiveClient).sort((a, b) => b.total - a.total);
+            cityActiveDetailTableBody.innerHTML = sortedActiveClients.map(data => \`
+                <tr class="hover:bg-gray-700">
+                    <td class="px-4 py-2"><a href="#" class="text-blue-400 hover:underline" data-codcli="\${data['Código']}">\${data['Código']}</a></td>
+                    <td class="px-4 py-2">\${data.fantasia || data.razaoSocial}</td>
+                    <td class="px-4 py-2 text-right">\${data.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                    <td class="px-4 py-2">\${data.cidade}</td>
+                    <td class="px-4 py-2">\${data.bairro}</td>
+                    <td class="px-4 py-2">\${data.rcas[0] || '-'}</td>
+                    <td class="px-4 py-2">\${data.rcas[1] || '-'}</td>
+                </tr>\`).join('');
+
+            inactiveClientsList.sort((a, b) => {
+                if (a.isNew && !b.isNew) return -1;
+                if (!a.isNew && b.isNew) return 1;
+                return (parseDate(b.ultimaCompra) || 0) - (parseDate(a.ultimaCompra) || 0);
+            });
+            cityInactiveDetailTableBody.innerHTML = inactiveClientsList.map(client => {
+                const novoLabel = client.isNew ? \`<span class="ml-2 text-xs font-semibold text-purple-400 bg-purple-900/50 px-2 py-0.5 rounded-full">NOVO</span>\` : '';
+                return \`
+                    <tr class="hover:bg-gray-700">
+                        <td class="px-4 py-2"><a href="#" class="text-blue-400 hover:underline" data-codcli="\${client['Código']}">\${client['Código']}</a></td>
+                        <td class="px-4 py-2 flex items-center">\${client.fantasia || client.razaoSocial}\${novoLabel}</td>
+                        <td class="px-4 py-2">\${client.cidade}</td>
+                        <td class="px-4 py-2">\${client.bairro}</td>
+                        <td class="px-4 py-2 text-center">\${formatDate(client.ultimaCompra)}</td>
+                        <td class="px-4 py-2">\${client.rcas[0] || '-'}</td>
+                        <td class="px-4 py-2">\${client.rcas[1] || '-'}</td>
+                    </tr>\`;
+            }).join('');
+
+            const cityChartTitleEl = document.getElementById('city-chart-title');
+            const cityChartOptions = {
+                indexAxis: 'y',
+                scales: { x: { grace: '15%' } },
+                plugins: { datalabels: { align: 'end', anchor: 'end', color: '#d1d5db', font: { size: 14, weight: 'bold' }, formatter: (value) => (value / 1000).toFixed(1) + 'k', offset: 8 } }
+            };
+            
+            const totalFaturamentoCidade = salesForAnalysis.reduce((sum, item) => sum + item.VLVENDA, 0);
+            totalFaturamentoCidadeEl.textContent = totalFaturamentoCidade.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+            if (cidadeFiltro) {
+                cityChartTitleEl.textContent = 'Top 10 Bairros';
+                const salesByBairro = {};
+                salesForAnalysis.forEach(sale => {
+                    const bairro = sale.BAIRRO || 'N/A';
+                    salesByBairro[bairro] = (salesByBairro[bairro] || 0) + sale.VLVENDA;
+                });
+                const sortedBairros = Object.entries(salesByBairro).sort(([, a], [, b]) => b - a).slice(0, 10);
+                createChart('salesByClientInCityChart', 'bar', sortedBairros.map(([name]) => name), sortedBairros.map(([, total]) => total), cityChartOptions);
+            } else {
+                cityChartTitleEl.textContent = 'Top 10 Cidades';
+                const salesByCity = {};
+                salesForAnalysis.forEach(sale => {
+                    const cidade = sale.CIDADE || 'N/A';
+                    salesByCity[cidade] = (salesByCity[cidade] || 0) + sale.VLVENDA;
+                });
+                const sortedCidades = Object.entries(salesByCity).sort(([, a], [, b]) => b - a).slice(0, 10);
+                createChart('salesByClientInCityChart', 'bar', sortedCidades.map(([name]) => name), sortedCidades.map(([, total]) => total), cityChartOptions);
+            }
+        }
+        
+        function getWeekOfMonth(date) {
+            const d = new Date(date);
+            const startOfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+            const dayOfMonth = d.getDate();
+            const dayOfWeek = startOfMonth.getDay(); 
+            const adjustedDayOfWeek = (dayOfWeek === 0) ? 6 : dayOfWeek - 1; 
+            return Math.ceil((dayOfMonth + adjustedDayOfWeek) / 7);
+        }
+
+        function populateWeeklyFilters() {
+            const supervisors = [...new Set(allSalesData.map(item => item.SUPERV).filter(Boolean).filter(sup => sup !== 'BALCAO'))].sort();
+            weeklySupervisorFilter.innerHTML = '';
+            supervisors.forEach(sup => {
+                weeklySupervisorFilter.innerHTML += \`<div class="flex items-center"><input id="sup-check-\${sup.replace(/\\s+/g, '-')}" type="checkbox" value="\${sup}" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-600 ring-offset-gray-800 focus:ring-2"><label for="sup-check-\${sup.replace(/\\s+/g, '-')}" class="ml-2 text-sm font-medium text-gray-300">\${sup}</label></div>\`;
+            });
+        }
+
+        function updateWeeklyView() {
+            const selectedSupervisors = Array.from(weeklySupervisorFilter.querySelectorAll('input:checked')).map(cb => cb.value);
+            
+            let dataForGeneralCharts = allSalesData;
+            if (currentWeeklyFornecedor) {
+                 dataForGeneralCharts = dataForGeneralCharts.filter(row => String(row.OBSERVACAOFOR).trim() === currentWeeklyFornecedor);
+            }
+
+            if (selectedSupervisors.length > 0) {
+                dataForGeneralCharts = dataForGeneralCharts.filter(d => selectedSupervisors.includes(d.SUPERV));
+            }
+
+            const today = new Date();
+            const currentMonth = today.getMonth();
+            const currentYear = today.getFullYear();
+
+            const monthSales = dataForGeneralCharts.filter(d => {
+                if (!d.DTPED) return false;
+                const saleDate = parseDate(d.DTPED);
+                return saleDate && saleDate.getMonth() === currentMonth && saleDate.getFullYear() === currentYear;
+            });
+            
+            const totalMes = monthSales.reduce((sum, item) => sum + item.VLVENDA, 0);
+            totalMesSemanalEl.textContent = totalMes.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+            const salesByWeekAndDay = {}; 
+            const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+            monthSales.forEach(sale => {
+                const saleDate = parseDate(sale.DTPED);
+                const weekNum = getWeekOfMonth(saleDate);
+                const dayName = dayNames[saleDate.getDay()];
+                if (!salesByWeekAndDay[weekNum]) salesByWeekAndDay[weekNum] = {};
+                if (!salesByWeekAndDay[weekNum][dayName]) salesByWeekAndDay[weekNum][dayName] = 0;
+                salesByWeekAndDay[weekNum][dayName] += sale.VLVENDA;
+            });
+
+            const weekLabels = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'];
+            const weekNumbers = Object.keys(salesByWeekAndDay).sort((a,b) => a - b);
+            const colors = ['#3B82F6', '#10B981', '#F97316', '#8B5CF6', '#EC4899'];
+            const currentMonthDatasets = weekNumbers.map((weekNum, index) => ({
+                label: \`Semana \${weekNum}\`,
+                data: weekLabels.map(day => salesByWeekAndDay[weekNum][day] || 0),
+                backgroundColor: colors[index % colors.length]
+            }));
+
+            const supervisorsForHistory = selectedSupervisors.length > 0 ? selectedSupervisors : Object.keys(historicalBests).filter(s => s !== 'BALCAO');
+            const historicalDataForChart = [0, 0, 0, 0, 0]; // Mon-Fri
+            supervisorsForHistory.forEach(sup => {
+                const bests = historicalBests[sup.toUpperCase()];
+                if(bests) {
+                    historicalDataForChart[0] += bests[1] || 0; // Monday
+                    historicalDataForChart[1] += bests[2] || 0; // Tuesday
+                    historicalDataForChart[2] += bests[3] || 0; // Wednesday
+                    historicalDataForChart[3] += bests[4] || 0; // Thursday
+                    historicalDataForChart[4] += bests[5] || 0; // Friday
+                }
+            });
+
+            const historicalDataset = {
+                label: 'Melhor Dia Mês Anterior',
+                data: historicalDataForChart,
+                backgroundColor: '#FBBF24',
+                borderColor: '#F59E0B'
+            };
+            
+            const finalDatasets = [historicalDataset, ...currentMonthDatasets];
+
+            createChart('weeklySalesChart', 'bar', weekLabels, finalDatasets, { plugins: { legend: { display: true, labels: { color: '#d1d5db' } } } });
+            
+            const dataForRankings = dataForGeneralCharts.filter(d => d.SUPERV !== 'BALCAO');
+            const positivacao = {};
+            dataForRankings.forEach(d => {
+                if (!d.NOME || !d.CODCLI) return;
+                if (!positivacao[d.NOME]) positivacao[d.NOME] = new Set();
+                positivacao[d.NOME].add(d.CODCLI);
+            });
+            const positivacaoRank = Object.entries(positivacao).map(([v, c]) => ({ vendedor: v, total: c.size })).sort((a, b) => b.total - a.total).slice(0, 10);
+            createChart('positivacaoChart', 'bar', positivacaoRank.map(r => getFirstName(r.vendedor)), positivacaoRank.map(r => r.total));
+
+            const vendorsInFilter = [...new Set(dataForRankings.map(d => d.NOME))].filter(v => v !== 'VD HIAGO');
+            const mixRank = vendorsInFilter.map(vendedor => {
+                const vendorSales = dataForRankings.filter(d => d.NOME === vendedor);
+                if (vendorSales.length === 0) return { vendedor, avgMix: 0 };
+                const supervisor = vendorSales[0].SUPERV;
+                let salesForMixCalc;
+                if (supervisor === 'OSÉAS SANTOS OL') {
+                    salesForMixCalc = vendorSales;
+                } else {
+                    const targetSuppliers = ['707', '708'];
+                    salesForMixCalc = vendorSales.filter(d => targetSuppliers.includes(String(d.CODFOR)));
+                }
+                const mixPerClient = {};
+                salesForMixCalc.forEach(d => {
+                    if (!d.CODCLI || !d.DESCRICAO) return;
+                    if (!mixPerClient[d.CODCLI]) mixPerClient[d.CODCLI] = new Set();
+                    mixPerClient[d.CODCLI].add(d.DESCRICAO);
+                });
+                const mixValues = Object.values(mixPerClient).map(p => p.size);
+                if (mixValues.length === 0) return { vendedor, avgMix: 0 };
+                const avgMix = mixValues.reduce((a, b) => a + b, 0) / mixValues.length;
+                return { vendedor, avgMix };
+            }).sort((a, b) => b.avgMix - a.avgMix).slice(0, 10);
+            createChart('mixChart', 'bar', mixRank.map(r => getFirstName(r.vendedor)), mixRank.map(r => r.avgMix));
+        }
+
+        function openModal(pedidoId) {
+            const orderInfo = aggregatedOrders.find(order => order.PEDIDO == pedidoId);
+            const itemsDoPedido = allSalesData.filter(item => item.PEDIDO == pedidoId);
+            if (!orderInfo) return;
+            modalPedidoId.textContent = pedidoId;
+            modalHeaderInfo.innerHTML = \`<div><p class="font-bold">Cód. Cliente:</p><p>\${orderInfo.CODCLI || 'N/A'}</p></div><div><p class="font-bold">Cliente:</p><p>\${orderInfo.CLIENTE_NOME || 'N/A'}</p></div><div><p class="font-bold">Vendedor:</p><p>\${orderInfo.NOME || 'N/A'}</p></div><div><p class="font-bold">Data Pedido:</p><p>\${formatDate(orderInfo.DTPED)}</p></div><div><p class="font-bold">Data Faturamento:</p><p>\${formatDate(orderInfo.DTSAIDA)}</p></div><div><p class="font-bold">Cidade:</p><p>\${orderInfo.CIDADE || 'N/A'}</p></div>\`;
+            modalTableBody.innerHTML = itemsDoPedido.map(item => {
+                const unitPrice = (item.QTVENDA > 0) ? (item.VLVENDA / item.QTVENDA) : 0;
+                return \`<tr class="hover:bg-gray-700"><td class="px-4 py-2">\${item.DESCRICAO}</td><td class="px-4 py-2 text-right">\${item.QTVENDA}</td><td class="px-4 py-2 text-right">\${item.TOTPESOLIQ.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Kg</td><td class="px-4 py-2 text-right"><div class="tooltip">\${unitPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}<span class="tooltip-text" style="width: max-content; transform: translateX(-50%); margin-left: 0;">Subtotal: \${item.VLVENDA.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span></div></td></tr>\`;
+            }).join('');
+            modalFooterTotal.innerHTML = \`<p class="text-lg font-bold text-blue-400">Mix de Produtos: \${itemsDoPedido.length}</p><p class="text-lg font-bold text-emerald-400">Total do Pedido: \${orderInfo.VLVENDA.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>\`;
+            modal.classList.remove('hidden');
+        }
+
+        function openClientModal(codcli) {
+            const clientData = allClientsData.find(c => String(c['Código']) === String(codcli));
+            if (!clientData) return;
+            let finalAddress = clientData.endereco || 'N/A';
+            const number = clientData.numero || 'SN';
+            if (number !== 'SN' && finalAddress !== 'N/A' && !finalAddress.includes(number)) { finalAddress += \`, \${number}\`; }
+            clientModalContent.innerHTML = \`<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 text-sm">
+                <div><p class="font-bold text-gray-400">Código:</p><p>\${clientData['Código'] || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">CNPJ/CPF:</p><p>\${clientData.cnpj_cpf || 'N/A'}</p></div>
+                <div class="md:col-span-2"><p class="font-bold text-gray-400">Insc. Est. / Produtor:</p><p>\${clientData.inscricaoEstadual || 'N/A'}</p></div>
+                <div class="md:col-span-2"><p class="font-bold text-gray-400">Razão Social:</p><p>\${clientData.razaoSocial || 'N/A'}</p></div>
+                <div class="md:col-span-2"><p class="font-bold text-gray-400">Nome Fantasia:</p><p>\${clientData.fantasia || 'N/A'}</p></div>
+                <div class="md:col-span-2"><p class="font-bold text-gray-400">Endereço:</p><p>\${finalAddress}</p></div>
+                <div><p class="font-bold text-gray-400">Bairro:</p><p>\${clientData.bairro || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">Cidade:</p><p>\${clientData.cidade || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">CEP:</p><p>\${clientData.cep || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">Telefone:</p><p>\${clientData.telefone || 'N/A'}</p></div>
+                <div class="md:col-span-2"><p class="font-bold text-gray-400">E-mail:</p><p>\${clientData.email || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">Ramo de Atividade:</p><p>\${clientData.ramo || 'N/A'}</p></div>
+                <div><p class="font-bold text-gray-400">Última Compra:</p><p>\${formatDate(clientData.ultimaCompra)}</p></div>
+            </div>\`;
+            clientModal.classList.remove('hidden');
+        }
+
+        // --- Event Listeners ---
+        viewTableBtn.addEventListener('click', () => { 
+            chartView.classList.add('hidden'); 
+            tableView.classList.remove('hidden'); 
+            viewTableBtn.classList.add('hidden'); 
+            viewChartBtn.classList.remove('hidden'); 
+        });
+        viewChartBtn.addEventListener('click', () => { 
+            tableView.classList.add('hidden'); 
+            chartView.classList.remove('hidden'); 
+            viewChartBtn.classList.add('hidden'); 
+            viewTableBtn.classList.remove('hidden'); 
+            updateAllVisuals();
+        });
+        showCityBtn.addEventListener('click', () => { resetMainFilters(); mainDashboard.classList.add('hidden'); cityView.classList.remove('hidden'); updateCityDropdowns(); updateCityView(); });
+        backToMainFromCityBtn.addEventListener('click', () => { resetCityFilters(); cityView.classList.add('hidden'); mainDashboard.classList.remove('hidden'); updateAllVisuals(); });
+        showWeeklyBtn.addEventListener('click', () => { resetMainFilters(); mainDashboard.classList.add('hidden'); weeklyView.classList.remove('hidden'); populateWeeklyFilters(); updateWeeklyView(); });
+        backToMainFromWeeklyBtn.addEventListener('click', () => { 
+            weeklyView.classList.add('hidden'); 
+            mainDashboard.classList.remove('hidden'); 
+            currentWeeklyFornecedor = '';
+            updateAllVisuals(); 
+        });
+        
+        // --- City Page Listeners ---
+        citySupervisorFilter.addEventListener('change', () => { 
+            cityVendedorFilter.value = ''; 
+            citySupervisorFilter.disabled = false;
+            updateCityDropdowns(); 
+            updateCityView(); 
+        });
+        cityVendedorFilter.addEventListener('change', () => { 
+            const selectedVendedor = cityVendedorFilter.value;
+            if(selectedVendedor) {
+                citySupervisorFilter.disabled = true;
+            } else {
+                citySupervisorFilter.disabled = false;
+            }
+            updateCityDropdowns(); 
+            updateCityView(); 
+        });
+        
+        const applyCityNameFilter = () => {
+            updateCityView();
+            citySuggestions.classList.add('hidden');
+        };
+
+        cityNameFilter.addEventListener('keydown', (e) => {
+            if (/[0-9]/.test(e.key)) {
+                e.preventDefault();
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                applyCityNameFilter();
+            }
+        });
+        
+        cityNameFilter.addEventListener('input', function() {
+            this.value = this.value.replace(/[0-9]/g, '');
+            const supervisor = citySupervisorFilter.value;
+            const vendedor = cityVendedorFilter.value;
+            let relevantSales = allSalesData;
+
+            if (vendedor) {
+                relevantSales = relevantSales.filter(d => d.NOME === vendedor);
+            } else if (supervisor) {
+                relevantSales = relevantSales.filter(d => d.SUPERV === supervisor);
+            }
+            
+            const possibleCitiesForFilter = [...new Set(relevantSales.map(item => item.CIDADE).filter(Boolean))].sort();
+
+            const inputText = this.value.toLowerCase();
+            citySuggestions.innerHTML = '';
+            if (!inputText) {
+                citySuggestions.classList.add('hidden');
+                return;
+            }
+            const suggestions = possibleCitiesForFilter.filter(city => city.toLowerCase().startsWith(inputText));
+            if (suggestions.length > 0) {
+                citySuggestions.innerHTML = suggestions.map(city => \`<a href="#" class="block p-2 hover:bg-gray-700">\${city}</a>\`).join('');
+                citySuggestions.classList.remove('hidden');
+            } else {
+                citySuggestions.classList.add('hidden');
+            }
+        });
+
+        citySuggestions.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (e.target.tagName === 'A') {
+                cityNameFilter.value = e.target.textContent;
+                applyCityNameFilter();
+            }
+        });
+        document.addEventListener('click', (e) => { if (!e.target.closest('#city-filter-container')) { citySuggestions.classList.add('hidden'); } });
+        
+        const applyCityCodCliFilter = () => {
+            const codcli = cityCodCliFilter.value.trim();
+            if (!codcli) {
+                resetCityFilters();
+                return;
+            }
+            const clientExists = allClientsData.some(c => c['Código'] === codcli);
+            if (clientExists) {
+                citySupervisorFilter.value = '';
+                cityVendedorFilter.value = '';
+                cityNameFilter.value = '';
+                citySupervisorFilter.disabled = true;
+                cityVendedorFilter.disabled = true;
+                cityNameFilter.disabled = true;
+                updateCityView();
+            }
+        };
+        cityCodCliFilter.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyCityCodCliFilter(); } });
+        cityCodCliFilter.addEventListener('blur', applyCityCodCliFilter);
+        clearCityFiltersBtn.addEventListener('click', resetCityFilters);
+
+        // --- Main Page Listeners ---
+        const applyMainCodCliFilter = () => {
+            const codcli = codcliFilter.value.trim();
+            if (!codcli) {
+                supervisorFilter.disabled = false;
+                vendedorFilter.disabled = false;
+                updateAllVisuals();
+                return;
+            }
+            const clientHasSales = allSalesData.some(s => s.CODCLI === codcli);
+            if (clientHasSales) {
+                supervisorFilter.value = '';
+                vendedorFilter.value = '';
+                supervisorFilter.disabled = true;
+                vendedorFilter.disabled = true;
+                updateAllVisuals();
+            }
+        };
+
+        codcliFilter.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); applyMainCodCliFilter(); }
+        });
+        codcliFilter.addEventListener('blur', applyMainCodCliFilter);
+
+        supervisorFilter.addEventListener('change', () => {
+            codcliFilter.value = '';
+            vendedorFilter.value = '';
+            updateDependentFilters();
+            updateAllVisuals();
+        });
+
+        vendedorFilter.addEventListener('change', () => {
+            codcliFilter.value = '';
+            updateDependentFilters();
+            updateAllVisuals();
+        });
+
+        posicaoFilter.addEventListener('change', updateAllVisuals);
+        
+        faturamentoBtn.addEventListener('click', () => { if (currentProductMetric !== 'faturamento') { currentProductMetric = 'faturamento'; faturamentoBtn.classList.add('active'); pesoBtn.classList.remove('active'); updateAllVisuals(); } });
+        pesoBtn.addEventListener('click', () => { if (currentProductMetric !== 'peso') { currentProductMetric = 'peso'; pesoBtn.classList.add('active'); faturamentoBtn.classList.remove('active'); updateAllVisuals(); } });
+        clearFiltersBtn.addEventListener('click', resetMainFilters);
+        
+        // --- Weekly Page Listeners ---
+        clearWeeklyFiltersBtn.addEventListener('click', () => { 
+            weeklySupervisorFilter.querySelectorAll('input:checked').forEach(cb => cb.checked = false); 
+            currentWeeklyFornecedor = '';
+            weeklyFornecedorToggleContainer.querySelectorAll('.fornecedor-btn').forEach(b => b.classList.remove('active'));
+            updateWeeklyView(); 
+        });
+        weeklySupervisorFilter.addEventListener('change', updateWeeklyView);
+        weeklyFornecedorToggleContainer.querySelectorAll('.fornecedor-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const fornecedor = btn.dataset.fornecedor;
+                if (currentWeeklyFornecedor === fornecedor) {
+                    currentWeeklyFornecedor = ''; 
+                    btn.classList.remove('active');
+                } else {
+                    currentWeeklyFornecedor = fornecedor;
+                    weeklyFornecedorToggleContainer.querySelectorAll('.fornecedor-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                }
+                updateWeeklyView();
+            });
+        });
+        
+        fornecedorToggleContainer.querySelectorAll('.fornecedor-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const fornecedor = btn.dataset.fornecedor;
+                if (currentFornecedor === fornecedor) {
+                    currentFornecedor = ''; btn.classList.remove('active');
+                } else {
+                    currentFornecedor = fornecedor;
+                    fornecedorToggleContainer.querySelectorAll('.fornecedor-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                }
+                populateSupervisors();
+                updateDependentFilters();
+                updateAllVisuals();
+            });
+        });
+
+        document.getElementById('report-table-body').addEventListener('click', (e) => { if (e.target.closest('a') && e.target.closest('a').dataset.pedidoId) { e.preventDefault(); openModal(e.target.closest('a').dataset.pedidoId); } });
+        modalCloseBtn.addEventListener('click', () => modal.classList.add('hidden'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) { modal.classList.add('hidden'); } });
+        cityActiveDetailTableBody.addEventListener('click', (e) => { if (e.target.closest('a') && e.target.closest('a').dataset.codcli) { e.preventDefault(); openClientModal(e.target.closest('a').dataset.codcli); } });
+        cityInactiveDetailTableBody.addEventListener('click', (e) => { if (e.target.closest('a') && e.target.closest('a').dataset.codcli) { e.preventDefault(); openClientModal(e.target.closest('a').dataset.codcli); } });
+        clientModalCloseBtn.addEventListener('click', () => clientModal.classList.add('hidden'));
+        clientModal.addEventListener('click', (e) => { if (e.target === clientModal) { clientModal.classList.add('hidden'); } });
+        
+        // --- Initial Load ---
+        populateSupervisors();
+        updateDependentFilters();
+        updateAllVisuals();
+        renderTable(aggregatedOrders);
+                `;
+
+                const reportTemplate = `
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PRIME DISTRIBUIÇÃO</title>
+    <link rel="icon" type="image/jpeg" href="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSnaaZ2WnZBJIxPRfabS4Ug78PKK6Gu3nbHlw&s">
+    <script src="https://cdn.tailwindcss.com"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"><\/script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
+        ::-webkit-scrollbar-corner { background: #111827; }
+        .sticky-header th { position: sticky; top: 0; z-index: 20; background-color: #1f2937; }
+        .hidden { display: none; }
+        .metric-btn.active { background-color: #1D4ED8; color: #FFF; }
+        .fornecedor-btn.active { background-color: #2563EB; color: #FFF; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .tooltip { position: relative; display: inline-block; cursor: pointer; }
+        .tooltip .tooltip-text {
+            visibility: hidden; width: 220px; background-color: #1f2937; color: #fff;
+            border-radius: 6px; padding: 8px; position: absolute; z-index: 1001; bottom: 125%; left: 50%;
+            margin-left: -110px; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 antialiased">
+    <div id="main-dashboard">
+        <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+            <header class="mb-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div class="text-center sm:text-left">
+                    <h1 class="text-2xl font-bold text-white"><span style="color: #FFC000;">PRIME</span> DISTRIBUIÇÃO</h1>
+                    <p class="text-gray-400 mt-1">Dados atualizados em: ${generationDate}</p>
+                </div>
+                <div class="flex gap-4 sm:gap-6">
+                    <div class="text-right"><p class="text-gray-400 text-sm">Peso Total</p><p id="total-peso" class="text-xl sm:text-2xl font-bold text-emerald-400">0,000 Ton</p></div>
+                    <div class="text-right"><p class="text-gray-400 text-sm">Faturamento Total</p><p id="total-vendas" class="text-xl sm:text-2xl font-bold text-emerald-400">R$ 0,00</p></div>
+                </div>
+            </header>
+            <div class="mb-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div id="fornecedor-toggle-container" class="w-full sm:w-auto rounded-lg p-1 flex justify-center sm:justify-start gap-2">
+                    <button data-fornecedor="PEPSICO" class="fornecedor-btn bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex-1 sm:flex-none">PEPSICO</button>
+                    <button data-fornecedor="MULTIMARCAS" class="fornecedor-btn bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex-1 sm:flex-none">MULTIMARCAS</button>
+                </div>
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <button id="viewChartBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Ver Gráficos</button>
+                    <button id="viewTableBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg hidden">Ver Tabela</button>
+                </div>
+            </div>
+            <div id="main-filters" class="mb-6 p-4 bg-gray-800 rounded-lg shadow-md">
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                    <div><label for="supervisor-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Supervisor</label><select id="supervisor-filter" class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"><option value="">Todos</option></select></div>
+                    <div><label for="vendedor-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Vendedor</label><select id="vendedor-filter" class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"><option value="">Todos</option></select></div>
+                    <div><label for="codcli-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Cód. Cliente</label><input type="text" id="codcli-filter" placeholder="Digite o código..." class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"></div>
+                    <div><label for="posicao-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Posição</label><select id="posicao-filter" class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"><option value="">Todas</option><option value="L">Liberado</option><option value="M">Montado</option><option value="F">Faturado</option></select></div>
+                    <div><button id="clear-filters-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-lg">Limpar Filtros</button></div>
+                </div>
+            </div>
+            <main id="app-container">
+                <div id="chartView" class="hidden">
+                    <div class="mb-6 bg-gray-800 p-4 rounded-lg"><h2 class="text-lg font-semibold text-white mb-4 text-center">Tendência de Faturamento</h2><div id="trendChartContainer" class="relative h-80"></div></div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="bg-gray-800 p-4 rounded-lg"><h2 id="sales-by-person-title" class="text-lg font-semibold text-white mb-4 text-center">Vendas por Supervisor</h2><div id="salesByPersonChartContainer" class="relative h-80"></div></div>
+                        <div class="bg-gray-800 p-4 rounded-lg"><h2 id="faturamentoPorFornecedorTitle" class="text-lg font-semibold text-white mb-4 text-center">Faturamento por Categoria</h2><div id="faturamentoPorFornecedorChartContainer" class="relative h-80"></div></div>
+                    </div>
+                    <div class="mt-6 bg-gray-800 p-4 rounded-lg">
+                        <div class="flex justify-between items-center mb-4"><h2 class="text-lg font-semibold text-white">Vendas por Produto</h2><div class="bg-gray-700 rounded-lg p-1 flex"><button id="faturamentoBtn" class="metric-btn active px-3 py-1 text-sm rounded-md">Faturamento</button><button id="pesoBtn" class="metric-btn px-3 py-1 text-sm rounded-md">Peso Kg</button></div></div>
+                        <div id="salesByProductBarChartContainer" class="relative h-80"></div>
+                    </div>
+                    <div class="mt-6 space-y-3">
+                        <button id="show-weekly-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg">Gráficos Semanais</button>
+                        <button id="show-city-btn" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg">Gráficos por Cidade</button>
+                    </div>
+                </div>
+                <div id="tableView"><div class="overflow-x-auto bg-gray-800 rounded-lg" style="max-height: 60vh;"><table class="min-w-full text-sm text-left"><thead class="text-xs text-gray-300 uppercase sticky-header"><tr><th class="px-4 py-3">Nº Pedido</th><th class="px-4 py-3">Cód. Cliente</th><th class="px-4 py-3">Vendedor</th><th class="px-4 py-3">Fornecedor</th><th class="px-4 py-3">Data Faturamento</th><th class="px-4 py-3 text-right">Peso Total</th><th class="px-4 py-3 text-right">Faturamento Total</th><th class="px-4 py-3">Posição</th></tr></thead><tbody id="report-table-body" class="divide-y divide-gray-700"></tbody></table></div></div>
+            </main>
+        </div>
+    </div>
+    <div id="city-view" class="hidden container mx-auto p-4 sm:p-6 lg:p-8">
+        <div class="flex justify-between items-center mb-6">
+            <div><h1 class="text-2xl font-bold text-white"><span style="color: #FFC000;">PRIME</span> DISTRIBUIÇÃO</h1><p class="text-lg text-gray-300 -mt-1">Análise de Vendas por Cidade</p></div>
+            <button id="back-to-main-from-city-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Voltar ao Dashboard</button>
+        </div>
+        <div class="mb-6 p-4 bg-gray-800 rounded-lg shadow-md">
+             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                <div><label for="city-supervisor-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Supervisor</label><select id="city-supervisor-filter" class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"><option value="">Todos</option></select></div>
+                <div><label for="city-vendedor-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar Vendedor</label><select id="city-vendedor-filter" class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"><option value="">Todos</option></select></div>
+                <div id="city-filter-container" class="relative"><label for="city-name-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar por Cidade</label><input type="text" id="city-name-filter" placeholder="Digite o nome da cidade..." class="bg-gray-700 text-sm rounded-lg block w-full p-2.5" autocomplete="off"><div id="city-suggestions" class="absolute z-10 w-full bg-gray-800 border border-gray-600 rounded-lg mt-1 hidden max-h-48 overflow-y-auto"></div></div>
+                <div><label for="city-codcli-filter" class="block mb-2 text-sm font-medium text-gray-300">Filtrar por Código</label><input type="text" id="city-codcli-filter" placeholder="Digite o código do cliente..." class="bg-gray-700 text-sm rounded-lg block w-full p-2.5"></div>
+                <div><button id="clear-city-filters-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-lg">Limpar Filtros</button></div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div class="bg-gray-800 p-4 rounded-lg">
+                 <div class="flex justify-between items-center mb-4">
+                    <div class="w-1/4"><span class="text-xl font-bold text-teal-400">Top 10</span></div>
+                    <div class="w-1/2 text-center"><h2 id="city-chart-title" class="text-lg font-semibold text-white"></h2></div>
+                    <div class="w-1/4 text-right"><p class="text-gray-400 text-sm">Total Vendido</p><p id="total-faturamento-cidade" class="text-xl font-bold text-emerald-400">R$ 0,00</p></div>
+                </div>
+                <div id="salesByClientInCityChartContainer" class="relative h-96"></div>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <h2 class="text-lg font-semibold text-white mb-4 text-center">Status dos Clientes</h2>
+                <div id="customerStatusChartContainer" class="relative h-96 flex items-center justify-center"></div>
+            </div>
+        </div>
+        <div class="bg-gray-800 p-4 rounded-lg mt-6">
+            <h3 class="text-lg font-semibold text-white mb-4 px-4">Clientes Ativos no Mês</h3>
+            <div class="overflow-x-auto" style="max-height: 40vh;">
+                <table class="min-w-full text-sm text-left">
+                    <thead class="text-xs text-gray-300 uppercase sticky-header">
+                        <tr>
+                            <th class="px-4 py-3">Código</th>
+                            <th class="px-4 py-3">Nome Fantasia</th>
+                            <th class="px-4 py-3 text-right">Faturamento</th>
+                            <th class="px-4 py-3">Cidade</th>
+                            <th class="px-4 py-3">Bairro</th>
+                            <th class="px-4 py-3">RCA 1</th>
+                            <th class="px-4 py-3">RCA 2</th>
+                        </tr>
+                    </thead>
+                    <tbody id="city-active-detail-table-body" class="divide-y divide-gray-700"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="bg-gray-800 p-4 rounded-lg mt-6">
+            <h3 class="text-lg font-semibold text-white mb-4 px-4">Clientes S/ Vendas no Mês</h3>
+            <div class="overflow-x-auto" style="max-height: 40vh;">
+                <table class="min-w-full text-sm text-left">
+                    <thead class="text-xs text-gray-300 uppercase sticky-header">
+                        <tr>
+                            <th class="px-4 py-3">Código</th>
+                            <th class="px-4 py-3">Nome Fantasia</th>
+                            <th class="px-4 py-3">Cidade</th>
+                            <th class="px-4 py-3">Bairro</th>
+                            <th class="px-4 py-3 text-center">Última Compra</th>
+                            <th class="px-4 py-3">RCA 1</th>
+                            <th class="px-4 py-3">RCA 2</th>
+                        </tr>
+                    </thead>
+                    <tbody id="city-inactive-detail-table-body" class="divide-y divide-gray-700"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div id="weekly-view" class="hidden container mx-auto p-4 sm:p-6 lg:p-8">
+        <div class="flex justify-between items-center mb-6">
+            <div><h1 class="text-2xl font-bold text-white"><span style="color: #FFC000;">PRIME</span> DISTRIBUIÇÃO</h1><p class="text-lg text-gray-300 -mt-1">Acompanhamento Semanal</p></div>
+            <button id="back-to-main-from-weekly-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Voltar ao Dashboard</button>
+        </div>
+        <div class="mb-6 p-4 bg-gray-800 rounded-lg shadow-md">
+            <div id="weekly-fornecedor-toggle-container" class="w-full sm:w-auto rounded-lg p-1 flex justify-center sm:justify-start gap-2 mb-4">
+                <button data-fornecedor="PEPSICO" class="fornecedor-btn bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex-1 sm:flex-none">PEPSICO</button>
+                <button data-fornecedor="MULTIMARCAS" class="fornecedor-btn bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex-1 sm:flex-none">MULTIMARCAS</button>
+            </div>
+            <div class="flex justify-between items-center mb-4"><label class="block text-sm font-medium text-gray-300 self-end">Filtrar Supervisores</label><button id="clear-weekly-filters-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-1 px-3 rounded-lg text-sm">Limpar Filtros</button></div>
+            <div id="weekly-supervisor-filter" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4"></div>
+        </div>
+        <div class="grid grid-cols-1 gap-6">
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <div class="flex justify-between items-center mb-4"><h2 class="text-lg font-semibold text-white text-center">Faturamento Mensal por Dia da Semana</h2><div class="text-right"><p class="text-gray-400 text-sm">Total do Mês</p><p id="total-mes-semanal" class="text-xl font-bold text-emerald-400">R$ 0,00</p></div></div>
+                <div id="weeklySalesChartContainer" class="relative h-96"></div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <div class="bg-gray-800 p-4 rounded-lg"><h2 class="text-lg font-semibold text-white mb-4 text-center">Ranking de Positivação</h2><div id="positivacaoChartContainer" class="relative h-80"></div></div>
+                <div class="bg-gray-800 p-4 rounded-lg"><h2 class="text-lg font-semibold text-white mb-4 text-center">Ranking de Mix de Produtos (Por PDV)</h2><div id="mixChartContainer" class="relative h-80"></div></div>
+            </div>
+        </div>
+    </div>
+    <div id="order-details-modal" class="modal-overlay hidden"><div class="bg-gray-800 rounded-lg shadow-2xl max-w-4xl w-full m-4"><div class="p-6 border-b border-gray-700 flex justify-between items-center"><h2 class="text-xl font-bold text-white">Detalhes do Pedido <span id="modal-pedido-id"></span></h2><button id="modal-close-btn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div><div id="modal-header-info" class="p-6 text-left grid grid-cols-2 md:grid-cols-3 gap-4 text-sm"></div><div class="p-6" style="max-height: 50vh; overflow-y: auto;"><table class="min-w-full text-sm text-left"><thead class="text-xs text-gray-300 uppercase"><tr><th class="px-4 py-3">Produto</th><th class="px-4 py-3 text-right">Quantidade</th><th class="px-4 py-3 text-right">Peso (Kg)</th><th class="px-4 py-3 text-right">Valor Unitário</th></tr></thead><tbody id="modal-table-body" class="divide-y divide-gray-700"></tbody></table></div><div id="modal-footer-total" class="p-6 border-t border-gray-700 flex justify-between items-center"></div></div></div>
+    <div id="client-details-modal" class="modal-overlay hidden"><div class="bg-gray-800 rounded-lg shadow-2xl max-w-2xl w-full m-4"><div class="p-6 border-b border-gray-700 flex justify-between items-center"><h2 class="text-xl font-bold text-white">Resumo Cadastral</h2><button id="client-modal-close-btn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div><div id="client-modal-content" class="p-6"></div></div></div>
+    <script>
+        const embeddedData = ${jsonDataString};
+        document.addEventListener('DOMContentLoaded', () => {
+            ${scriptLogic}
+        });
+    <\/script>
+</body>
+</html>`;
+
+                const blob = new Blob([reportTemplate], { type: 'text/html' });
+                downloadLink.href = URL.createObjectURL(blob);
+                downloadLink.download = 'DASHBOARD PRIME.html';
+            }
+        });
+    </script>
+</body>
+</html>
